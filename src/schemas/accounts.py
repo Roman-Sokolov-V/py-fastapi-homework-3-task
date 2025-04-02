@@ -6,7 +6,8 @@ from pydantic import AfterValidator, BaseModel, ValidationError
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Path, status
 
-from database import accounts_validators
+from database import accounts_validators, ActivationTokenModel
+
 
 def password_validator(password: str) -> str:
     if len(password) < 8:
@@ -41,7 +42,7 @@ def password_validator(password: str) -> str:
 
 
 class UserRegistrationRequestSchema(BaseModel):
-    email: Annotated[str, Field(..., max_length=255)]
+    email: Annotated[EmailStr, Field(..., max_length=255)]
     password: Annotated[str, AfterValidator(password_validator)]
 
 
@@ -53,12 +54,13 @@ class UserRegistrationResponseSchema(BaseModel):
 
 
 class UserActivationRequestSchema(BaseModel):
-    ...
+    email: Annotated[EmailStr, Field(..., max_length=255)]
+    token: str
+
 
 
 class MessageResponseSchema(BaseModel):
-    pass
-
+    message: str
 
 class PasswordResetRequestSchema(BaseModel):
     pass
