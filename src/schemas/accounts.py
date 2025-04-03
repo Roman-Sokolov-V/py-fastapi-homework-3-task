@@ -58,16 +58,17 @@ class UserActivationRequestSchema(BaseModel):
     token: str
 
 
-
 class MessageResponseSchema(BaseModel):
     message: str
 
 class PasswordResetRequestSchema(BaseModel):
-    pass
+    email: Annotated[EmailStr, Field(..., max_length=255)]
 
 
 class PasswordResetCompleteRequestSchema(BaseModel):
-    pass
+    email: Annotated[EmailStr, Field(..., max_length=255)]
+    token: str
+    password: Annotated[str, AfterValidator(password_validator)]
 
 
 class UserLoginResponseSchema(BaseModel):
