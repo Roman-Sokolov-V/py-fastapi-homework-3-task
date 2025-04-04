@@ -2,14 +2,13 @@ from datetime import datetime, timezone
 from typing import cast
 
 from fastapi import APIRouter, Depends, status, HTTPException
-from fastapi.responses import JSONResponse
-from sqlalchemy import select, delete, exists
+
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
-
-from config import get_jwt_auth_manager, get_settings, BaseAppSettings
+from config import get_jwt_auth_manager
 from database import (
     get_db,
     UserModel,
@@ -23,12 +22,14 @@ from database.models.accounts import UserProfileModel
 from exceptions import BaseSecurityError
 from routes.accounts_crud import get_user, get_activation_token
 from security.interfaces import JWTAuthManagerInterface
-from security.passwords import hash_password
+
 from schemas import (
     UserRegistrationResponseSchema,
     UserRegistrationRequestSchema, MessageResponseSchema,
     UserActivationRequestSchema, PasswordResetRequestSchema,
-    PasswordResetCompleteRequestSchema,
+    PasswordResetCompleteRequestSchema, UserLoginResponseSchema,
+    UserLoginRequestSchema, TokenRefreshResponseSchema,
+    TokenRefreshRequestSchema,
 )
 
 router = APIRouter()
@@ -207,7 +208,8 @@ async def activate(
                            " of whether the user exists or is active.",
             "content": {
                 "application/json": {
-                    "example": { "message": "If you are registered, you will receive an email with instructions."}
+                    "example": {
+                        "message": "If you are registered, you will receive an email with instructions."}
                 }
             }
         }
@@ -243,7 +245,7 @@ async def password_reset_token(
             "description": "Password reset successfully.",
             "content": {
                 "application/json": {
-                    "example": { "message": "Password reset successfully."}
+                    "example": {"message": "Password reset successfully."}
                 }
             }
         },
@@ -318,4 +320,123 @@ async def reset_password_complete(
         )
     return MessageResponseSchema(
         message="Password reset successfully."
+    )
+
+
+@router.post(
+    "/login/",
+    response_model=UserLoginResponseSchema,
+    status_code=201,
+    summary="User login",
+    description=(
+            "<h3>This endpoint authenticates a user based on their"
+            " email and password, generates access and refresh tokens"
+            " upon successful login, stores the refresh token in"
+            " the database, and return access and refresh tokens</h3>"
+    ),
+)
+async def login_user(
+        cred_data: UserLoginRequestSchema,
+        db: AsyncSession = Depends(get_db),
+        jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager)
+):
+    user_db = await get_user(email=cred_data.email, db=db)
+    if not user_db or not user_db.verify_password(cred_data.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password."
+        )
+
+    if not user_db.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is not activated."
+        )
+    token_payload = {
+        "user_id": user_db.id,
+        # "group_id": user_db.group_id,
+        # "is_active": user_db.is_active
+    }
+    access_token = jwt_manager.create_access_token(data=token_payload)
+
+    refresh_token = jwt_manager.create_refresh_token(data=token_payload)
+
+    ref_token_data = jwt_manager.decode_refresh_token(refresh_token)
+    print(f"{ref_token_data=}")
+    days_valid = int((ref_token_data["exp"] - datetime.now(
+        timezone.utc).timestamp()) / 86400)
+
+    print(f"{days_valid=}")
+    refresh_token_orm = RefreshTokenModel.create(
+        user_id=user_db.id,
+        days_valid=days_valid,
+        token=refresh_token
+    )
+    db.add(refresh_token_orm)
+    try:
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request."
+        )
+    return UserLoginResponseSchema(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer"
+    )
+
+
+@router.post(
+    "/refresh/",
+    response_model=TokenRefreshResponseSchema,
+    status_code=200,
+    summary="User login",
+    description=(
+            "<h3>This endpoint authenticates a user based on their"
+            " email and password, generates access and refresh tokens"
+            " upon successful login, stores the refresh token in"
+            " the database, and return access and refresh tokens</h3>"
+    ),
+)
+async def refresh_access_token(
+        refresh_token_schema: TokenRefreshRequestSchema,
+        db: AsyncSession = Depends(get_db),
+        jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager)
+):
+    refresh_token = refresh_token_schema.refresh_token
+    try:
+        refresh_token_dict = jwt_manager.decode_refresh_token(refresh_token)
+    except BaseSecurityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token has expired."
+        )
+    print(f"{refresh_token_dict=}")
+
+    query = (
+        select(RefreshTokenModel).
+        options(joinedload(RefreshTokenModel.user)).
+        where(RefreshTokenModel.token == refresh_token)
+    )
+    refresh_token_db = (await db.execute(query)).scalar_one_or_none()
+    print(f"{refresh_token_db=}")
+
+    if not refresh_token_db:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token not found."
+        )
+    if not refresh_token_db.user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found."
+        )
+
+    access_token = jwt_manager.create_access_token(
+        {"user_id": refresh_token_db.user_id}
+    )
+    return TokenRefreshResponseSchema(
+        access_token=access_token
     )

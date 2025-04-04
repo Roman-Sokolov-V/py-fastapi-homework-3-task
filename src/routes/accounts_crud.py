@@ -3,13 +3,8 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import joinedload
 
 from database import (
-    get_db,
     UserModel,
-    UserGroupModel,
-    UserGroupEnum,
-    ActivationTokenModel,
-    PasswordResetTokenModel,
-    RefreshTokenModel
+    ActivationTokenModel
 )
 
 
@@ -28,7 +23,3 @@ async def get_activation_token(
     )
     token = (await db.execute(stmt)).scalar_one_or_none()
     return token
-
-# async def get_group(db: AsyncSession, group_name: str) -> UserGroupModel | None:
-#     stmt = select(UserGroupModel).where(
-#         UserGroupModel.name == UserGroupEnum.USER)
