@@ -221,10 +221,10 @@ async def password_reset_token(
 ):
     user_db = await get_user(email=reset_schema.email, db=db)
     if user_db and user_db.is_active:
-        user_db.password_reset_token = None
-        await db.commit()
+        user_db.password_reset_token = None  # prepare to remove reset token from db
+        await db.commit()  # remove reset token from db
         user_db.password_reset_token = PasswordResetTokenModel(
-            user_id=user_db.id)
+            user_id=cast(int, user_db.id))
         await db.commit()
     return MessageResponseSchema(
         message="If you are registered, you will receive an email with instructions."
@@ -308,9 +308,8 @@ async def reset_password_complete(
         )
     user_db.password = new_cred_data_schema.password
     try:
-        await db.delete(token_user_db)
-        await db.commit()
-        await db.refresh(user_db)
+        await db.delete(token_user_db)  # prepare to remove reset token from db
+        await db.commit()  # remove reset token from db
 
     except SQLAlchemyError:
         await db.rollback()
@@ -362,14 +361,10 @@ async def login_user(
     refresh_token = jwt_manager.create_refresh_token(data=token_payload)
 
     ref_token_data = jwt_manager.decode_refresh_token(refresh_token)
-    print(f"{ref_token_data=}")
-    days_valid = int((ref_token_data["exp"] - datetime.now(
-        timezone.utc).timestamp()) / 86400)
 
-    print(f"{days_valid=}")
-    refresh_token_orm = RefreshTokenModel.create(
+    refresh_token_orm = RefreshTokenModel(
         user_id=user_db.id,
-        days_valid=days_valid,
+        expires_at=datetime.fromtimestamp(ref_token_data["exp"]),
         token=refresh_token
     )
     db.add(refresh_token_orm)
@@ -407,13 +402,12 @@ async def refresh_access_token(
 ):
     refresh_token = refresh_token_schema.refresh_token
     try:
-        refresh_token_dict = jwt_manager.decode_refresh_token(refresh_token)
+        jwt_manager.decode_refresh_token(refresh_token)
     except BaseSecurityError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token has expired."
         )
-    print(f"{refresh_token_dict=}")
 
     query = (
         select(RefreshTokenModel).
@@ -421,7 +415,6 @@ async def refresh_access_token(
         where(RefreshTokenModel.token == refresh_token)
     )
     refresh_token_db = (await db.execute(query)).scalar_one_or_none()
-    print(f"{refresh_token_db=}")
 
     if not refresh_token_db:
         raise HTTPException(
