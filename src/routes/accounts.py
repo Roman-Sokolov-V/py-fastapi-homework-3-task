@@ -221,10 +221,19 @@ async def password_reset_token(
 ):
     user_db = await get_user(email=reset_schema.email, db=db)
     if user_db and user_db.is_active:
-        user_db.password_reset_token = None  # prepare to remove reset token from db
-        await db.commit()  # remove reset token from db
+        # user_db.password_reset_token = None  # prepare to remove reset token from db
+        # await db.commit()  # remove reset token from db
+
+        query = select(PasswordResetTokenModel).where(PasswordResetTokenModel.token == user_db.password_reset_token)
+        old_reset_token = (await db.execute(query)).first()
+        if old_reset_token:
+            db.delete(old_reset_token)
+            await db.commit()
+            await db.refresh(user_db)
+
         user_db.password_reset_token = PasswordResetTokenModel(
-            user_id=cast(int, user_db.id))
+            user_id=cast(int, user_db.id)
+        )
         await db.commit()
     return MessageResponseSchema(
         message="If you are registered, you will receive an email with instructions."
@@ -306,7 +315,9 @@ async def reset_password_complete(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid email or token."
         )
-    user_db.password = new_cred_data_schema.password
+    user_db.password = new_cred_data_schema.password  # use setter to hash password
+    # user_db it is instance of UserModel, password in this case is setter
+    # that hash value and give it in _hashed_password - attribute
     try:
         await db.delete(token_user_db)  # prepare to remove reset token from db
         await db.commit()  # remove reset token from db
